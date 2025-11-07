@@ -5,12 +5,12 @@ with open("requirements.txt") as f:
 
 setup(
     name="seg_cl_pipeline",
-    version="1.0.0",
+    version="2.1.0",
     packages=find_packages(),
     install_requires=requirements,
     entry_points={
         "console_scripts": [
-            "run-pipeline=seg_cl_pipeline.pipeline:main",
+            "run-pipeline=v2.runner:run_pipeline",
         ],
     },
     author="Moritz Schillinger",
@@ -18,6 +18,6 @@ setup(
     description="An image segmentation and analysis pipeline for MSOT research",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    url="https://gitos.rrze.fau.de/ec65ohyq/pad-seg-cl-pipeline",
+    url="https://github.com/Mo-Sc/PAD-Seg-Cl-Pipeline",
     python_requires=">=3.10",
 )
