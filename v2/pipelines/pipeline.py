@@ -16,16 +16,14 @@ from v2.data.load_subjects import collect_subjects_demo
 
 # global pipeline config
 global_config = GlobalConfig(
-    output_dir="datav2/output",
+    output_dir="data/demo/output",
     overwrite=False,
     run_id=None,
 )
 
 # dataset config
 data_config = DataConfig(
-    input_dir="seg-cl-pipeline/misc/demo",
-    us_channel_names=["US"],
-    oa_channel_names=["Hb", "HbO2"],
+    input_dir="data/demo/input",
 )
 
 # configure segmentation step (default config)
@@ -46,10 +44,7 @@ analysis_config = AnalysisConfig(
 )
 
 # load the subjects in the dataset
-subjects = collect_subjects_demo(
-    data_config=data_config,
-    file_ending=".npy",
-)
+subjects = collect_subjects_demo(data_config=data_config)
 
 
 pipeline = [

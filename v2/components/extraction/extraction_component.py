@@ -58,28 +58,16 @@ class ExtractionComponent(PipelineComponent):
         pbar = tqdm(total=len(self.subjects), desc="Postprocessing")
 
         for subject in self.subjects:
-            pbar.set_description(
-                f"Intensity Extraction, Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
-            )
+            pbar.set_description(f"Intensity Extraction, subject: {subject.subject_id}")
 
             roi, _ = subject.load_dataset(src_group_roi, src_dataset_roi)
             oa, oa_meta = subject.load_dataset(src_group_oa, src_dataset_oa)
-
+            oa = oa[0, :, :, 0, :]
+            # if channel names are stored in hdf5 attributes convert to list
             try:
-                # if channel names are stored in hdf5 attributes convert to list
                 oa_channels = self.hdf5_attr_list(oa_meta["channel_names"])
             except KeyError:
-                # this uses hardcoded fallback for known channel configs
-                # necessary for old datasets without channel names in metadata
-                # TODO: remove this fallback in future versions
-                logging.warning(
-                    f"Channel names not found in metadata for {subject.subject_id}. Falling back to hardcoded channel names."
-                )
-                from v2.utils.channels import infer_channel_names_from_shape
-
-                oa_channels = infer_channel_names_from_shape(oa.shape)
-
-                logging.warning(f"Channel names: {oa_channels}")
+                oa_channels = self.hdf5_attr_list(oa_meta["spectra"])
 
             if roi.shape[1:] != oa.shape[1:]:
                 raise ValueError(
@@ -129,6 +117,10 @@ class ExtractionComponent(PipelineComponent):
 
                 roi_features = self._summarize_roi_intensity(roi[0], oa[i])
 
+                # todo: in the future, additional features should only be added to a separate sheet
+                # because they dont depend on wavelength/channel
+                # in general we can add all metadata to a separate sheet (as started below)
+                roi_features = self._additional_features(roi[0], oa[i], roi_features)
                 # extract mask content for the target class id
 
                 oa_masked = np.where(roi[0] == self.config.target_class_id, oa[i], 0)
@@ -174,6 +166,13 @@ class ExtractionComponent(PipelineComponent):
                 attributes=hdf5_attributes,
             )
 
+            if self.config.xlsx_export:
+                ts = oa_meta["timestamp"]
+                combined_intensity_dict["metadata"][subject.subject_id] = {
+                    "timestamp": ts
+                }
+
+
             pbar.update(1)
 
         pbar.close()
@@ -188,10 +187,24 @@ class ExtractionComponent(PipelineComponent):
         """
 
         roi_mask = mask.copy()
-        oa_scan = scan.copy()
+        oa_scan = scan.astype(float).copy()
 
-        # extract only the ROI
-        # roi_mask[roi_mask != self.config.target_class_id] = 0
+        if self.config.positive_only:
+            # restrict ROI to positive voxels only
+            roi_mask = np.where(
+                (oa_scan > 0) & (roi_mask == self.config.target_class_id), roi_mask, 0
+            )
+
+        # if no ROI present for the requested label
+        if not np.any(roi_mask == self.config.target_class_id):
+            raise ValueError(
+                f"No positive pixels in ROI for subject {self.subject_id} with target class id {self.config.target_class_id}."
+            )
+        # alternative: return empty dict, but have to make sure it can be handled in the downstream steps
+        # logging.warning(
+        #     f"No ROI found for subject {subject.subject_id} with target class id {self.config.target_class_id}."
+        # )
+        # return {}
 
         # create sitk images
         sitk_mask = sitk.GetImageFromArray(np.expand_dims(roi_mask, axis=0))
@@ -202,9 +215,16 @@ class ExtractionComponent(PipelineComponent):
             sitk_scan, sitk_mask, label=self.config.target_class_id
         )
 
+        return roi_features
+
+    def _additional_features(self, mask, scan, roi_features):
+        """
+        Adds additional features that are not part of pyradiomics.
+        """
+
         # calculates the centroid by averaging the coordinates of all pixels in the ROI
         roi_centroid_px = np.mean(
-            np.argwhere(roi_mask == self.config.target_class_id), axis=0
+            np.argwhere(mask == self.config.target_class_id), axis=0
         )
         # convert to m
         roi_centroid = roi_centroid_px * self.px_size
@@ -239,6 +259,10 @@ class ExtractionComponent(PipelineComponent):
             # Convert dict of dicts to DataFrame
             df = pd.DataFrame.from_dict(subjects, orient="index").reset_index()
             df = df.rename(columns={"index": "subject_id"})
+
+            if channel in ("metadata", "METADATA"):
+                dfs_by_channel[channel] = df
+                continue
 
             # Convert any 0-dim np.ndarray to scalar
             for col in df.columns:

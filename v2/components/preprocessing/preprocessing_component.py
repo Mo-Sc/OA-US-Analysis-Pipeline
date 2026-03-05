@@ -33,9 +33,7 @@ class PreprocessingComponent(PipelineComponent):
 
         for subject in self.subjects:
 
-            pbar.set_description(
-                f"Preprocessing Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
-            )
+            pbar.set_description(f"Preprocessing Study subject: {subject.subject_id}")
 
             # Load the scan data
             data, data_meta = subject.load_dataset(src_group, src_dataset)

@@ -1,4 +1,4 @@
-from typing import Dict, Any
+from typing import Dict, Any, Union
 from pathlib import Path
 import h5py
 import json
@@ -10,15 +10,18 @@ import logging
 import numpy as np
 import imageio.v2 as imageio
 
-from v2.data.tags import HDF5Tags
+from v2.data.tags import HDF5Tags, AttributeTags
 from v2 import bool_env
 from v2.data import generate_subject_id
+from v2.configs import DataConfig
+from v2.data import serialize_np
 
 
 class Subject:
     """
     Represents a subject in the analysis pipeline and links to its HDF5 file.
     Contains methods for reading and writing HDF5 datasets.
+    frame can be specified as an index or a name, if frame names are provided in the metadata.
     Since orientation in hdf5 visualization is flipped, all datasets are flipped upside down (along axis 1)
     before reading/writing.
     """
@@ -26,33 +29,34 @@ class Subject:
     def __init__(
         self,
         input_file: str,
-        metadata: Dict[str, str],
+        data_config: DataConfig,
+        group_id: int,
         study_id: int,
         scan_id: int,
-        frame_id: int,
-        group_id: int,
+        frame: Union[int, str],
+        metadata: Dict[str, Any] = None,
     ):
         self.input_file = input_file
-        self.metadata = metadata
+
+        self.group_id = group_id
         self.study_id = study_id
         self.scan_id = scan_id
-        self.frame_id = frame_id
-        self.group_id = group_id
+        self.frame = frame
 
         self._hdf5_path = None
         self._extraction_results = None
 
-        self.subject_id = generate_subject_id(group_id, study_id, scan_id, frame_id)
+        self.src_metadata = {} if metadata is None else metadata
+        self.data_config = data_config
 
-    # def get_hdf5_path(self) -> Path:
-    #     return os.path.join(os.environ["RUN_OUTDIR"] / f"{self.filename.stem}.hdf5")
+        self.subject_id = generate_subject_id(group_id, study_id, scan_id, frame)
 
     def initialize_hdf5(self, input_dir: Path = None):
         """Create the HDF5 file and store raw input data and metadata."""
 
-        # by default input dir is contained in metadata
+        # by default input dir is contained in data_config
         if input_dir is None:
-            input_dir = Path(self.metadata["input_dir"])
+            input_dir = Path(self.data_config.input_dir)
 
         self._hdf5_path = (
             Path(os.environ["RUN_OUTDIR"])
@@ -61,21 +65,34 @@ class Subject:
         )
 
         if self._hdf5_path.exists() and not bool_env("OVERWRITE"):
+            # If we skip initialization, we still want derived metadata (e.g. scan_date)
+            # that was persisted into the existing HDF5 to be available on the Subject.
+            with h5py.File(self._hdf5_path, "r") as f:
+                persisted = json.loads(f.attrs.get(AttributeTags.METADATA, "{}"))
+            self.src_metadata.update(persisted)
             logging.info(
-                f"HDF5 for subject {self.subject_id} already exists. Skipping initialization."
+                f"HDF5 for subject {self.subject_id} already exists. Skipping initialization (but loading metadata)."
             )
             return
 
         os.makedirs(self._hdf5_path.parent, exist_ok=True)
 
         try:
-            # TODO: this could be moved into some import_dataset utility (which could then also be used in DatasetLoader)
+            # TODO: this could be moved into some import_dataset utility or Reader/Writer architecture (which could then also be used in DatasetLoader)
             if self.input_file.endswith(".nii"):
-                raw_oa_data, raw_us_data = self._load_raw_nifti_data(input_dir)
+                raise NotImplementedError(
+                    "Loading from NIfTI is not updated for the latest pipeline version."
+                )
+                # raw_oa_data, raw_us_data = self._load_raw_nifti_data(input_dir)
             elif self.input_file.endswith(".npy"):
-                raw_oa_data, raw_us_data = self._load_raw_npy_data(input_dir)
+                raise NotImplementedError(
+                    "Loading from NPY is not updated for the latest pipeline version."
+                )
+                # raw_oa_data, raw_us_data = self._load_raw_npy_data(input_dir)
             elif self.input_file.endswith(".hdf5"):
-                raw_oa_data, raw_us_data = self._load_raw_hdf5_data(input_dir)
+                us_img, us_attr, us_meta, oa_img, oa_attr, oa_meta = (
+                    self._load_hdf5_data(input_dir)
+                )
             else:
                 raise ValueError(
                     f"Unsupported file format for {self.input_file}. Only .nii, .npy and .hdf5 are supported."
@@ -86,44 +103,62 @@ class Subject:
             )
             return
 
+        self.src_metadata[HDF5Tags.US] = us_attr
+        self.src_metadata[HDF5Tags.OA] = oa_attr
+
         with h5py.File(self._hdf5_path, "w") as f:
-            f.attrs[HDF5Tags.INPUT_FILE] = str(self.input_file)
-            f.attrs[HDF5Tags.STUDY_ID] = self.study_id
-            f.attrs[HDF5Tags.SCAN_ID] = self.scan_id
-            f.attrs[HDF5Tags.FRAME_ID] = self.frame_id
-            f.attrs[HDF5Tags.GROUP_ID] = self.group_id
-            f.attrs[HDF5Tags.METADATA] = json.dumps(self.metadata)
+            f.attrs[AttributeTags.INPUT_FILE] = str(self.input_file)
+            f.attrs[AttributeTags.GROUP_ID] = self.group_id
+            f.attrs[AttributeTags.STUDY_ID] = self.study_id
+            f.attrs[AttributeTags.SCAN_ID] = self.scan_id
+            f.attrs[AttributeTags.FRAME] = self.frame
+            f.attrs[AttributeTags.METADATA] = json.dumps(
+                serialize_np(self.src_metadata)
+            )
+            f.attrs[AttributeTags.DATA_CONFIG] = json.dumps(
+                self.data_config.serialize()
+            )
 
             raw_group = f.create_group(HDF5Tags.RAW)
-            oa_dataset = raw_group.create_dataset(
-                HDF5Tags.OA,
-                data=raw_oa_data,
-                compression="gzip",
-                compression_opts=4,
-            )
-            oa_dataset.attrs["channel_names"] = self.metadata["oa_channel_names"]
-
             us_dataset = raw_group.create_dataset(
                 HDF5Tags.US,
-                data=raw_us_data,
+                data=us_img,
                 compression="gzip",
                 compression_opts=4,
             )
-            us_dataset.attrs["channel_names"] = self.metadata["us_channel_names"]
+
+            # add meta
+            for key, value in us_meta.items():
+                us_dataset.attrs[key] = (
+                    value if type(value) in [str, int, float] else str(value)
+                )
+
+            oa_dataset = raw_group.create_dataset(
+                HDF5Tags.OA,
+                data=oa_img,
+                compression="gzip",
+                compression_opts=4,
+            )
+            # add meta
+            for key, value in oa_meta.items():
+                oa_dataset.attrs[key] = (
+                    value if type(value) in [str, int, float] else str(value)
+                )
 
     def exists(self) -> bool:
         return self.hdf5_path.exists()
 
     def serialize(self) -> Dict:
         return {
-            "subject_id": self.subject_id,
-            "filename": str(self.input_file),
-            "hdf5_path": self._hdf5_path,
-            "metadata": self.metadata,
-            "study_id": self.study_id,
-            "scan_id": self.scan_id,
-            "frame_id": self.frame_id,
-            "group_id": self.group_id,
+            AttributeTags.SUBJECT_ID: self.subject_id,
+            AttributeTags.INPUT_FILE: str(self.input_file),
+            AttributeTags.HDF5_PATH: self._hdf5_path,
+            AttributeTags.METADATA: self.src_metadata,
+            AttributeTags.DATA_CONFIG: self.data_config.serialize(),
+            AttributeTags.GROUP_ID: self.group_id,
+            AttributeTags.STUDY_ID: self.study_id,
+            AttributeTags.SCAN_ID: self.scan_id,
+            AttributeTags.FRAME: self.frame,
         }
 
     def add_dataset(
@@ -207,7 +242,7 @@ class Subject:
 
         # if dataset is segmentation, add legend
         if step_name == HDF5Tags.SEGMENTED:
-            class_labels = self.metadata.get("class_labels", [])
+            class_labels = self.src_metadata.get("class_labels", [])
             # TODO: add legend to image
 
         png_path = output_dir / f"{self.subject_id.stem}_{step_name}.png"
@@ -234,73 +269,170 @@ class Subject:
         nib.save(new_img, nifti_path)
         logging.info(f"Exported NIfTI for {step_name} - {s_type} to {nifti_path}")
 
-    def _load_raw_nifti_data(self, input_dir: Path):
-
-        raw_oa_data = nib.load(input_dir / "oa" / self.input_file).get_fdata()
-        # move last dimension to the first position
-        raw_oa_data = np.moveaxis(raw_oa_data, -1, 0)
-        raw_us_data = nib.load(input_dir / "us" / self.input_file).get_fdata()
-        # add leading dimension for US data
-        raw_us_data = np.expand_dims(raw_us_data, axis=0)
-        return np.flip(raw_oa_data, 1), np.flip(raw_us_data, 1)
-
-    def _load_raw_npy_data(self, input_dir: Path):
-        raw_oa_data = np.load(input_dir / "oa" / self.input_file)
-        raw_us_data = np.load(input_dir / "us" / self.input_file)
-        return np.flip(raw_oa_data, 1), np.flip(raw_us_data, 1)
-
-    def _load_raw_hdf5_data(self, input_dir: Path):
-
-        oa_hdf5_tags = "/".join(self.metadata["hdf5_tags"])
+    def _load_hdf5_data(self, input_dir: Path):
+        # TODO add src meta to meta
+        hdf5_path_oa = "/".join(self.data_config.hdf5_tags_oa)
+        hdf5_path_us = "/".join(self.data_config.hdf5_tags_us)
 
         with h5py.File(input_dir / self.input_file, "r") as f:
-            oa_data = f[oa_hdf5_tags]
-            oa_attr = f[oa_hdf5_tags].attrs
-            us_data = f["ultrasounds/ultrasound/0"]
 
-            # if hdf5 attributes has a timestamp ("date") field, add it to metadata
-            if "date" in f.attrs:
-                self.metadata["scan_date"] = f.attrs["date"]
+            global_attr = dict(f.attrs)
+            oa_data = f[hdf5_path_oa]
+            oa_attr = dict(f[hdf5_path_oa].attrs)
+            us_data = f[hdf5_path_us]
+            us_attr = dict(f[hdf5_path_us].attrs)
 
-            if self.metadata["hdf5_tags"][0] == "unmixed":
-                # for unmixed data, use the only available frame in OA
-                # and the given frame in the attributes for US
-                # check if oa_attr has a "frame" attribute
-                if "frame" in oa_attr:
-                    # legacy, frame was not list yet
-                    selected_frame = int(oa_attr["frame"])
-                    oa_img = np.array(oa_data[self.frame_id, :, :, 0, :])
-                    us_img = np.array(us_data[selected_frame, :1, :, 0, :])
-                elif "frames" in oa_attr:
-                    # new, frame is a list
-                    # find position of target frame in list
-                    avail_frames = ast.literal_eval(oa_attr["frames"])
-                    selected_frame = avail_frames.index(self.frame_id)
-                    oa_img = np.array(oa_data[selected_frame, :, :, 0, :])
-                    us_img = np.array(us_data[self.frame_id, :1, :, 0, :])
+            def _resolve_frame_ids(frame, avail_frames_us, avail_frames_oa):
+                """
+                THis can handle frame specified as index or name. If name is specified, it looks up the frame id in the hdf5 attributes frames list
+                So we can also correctly index datasets where not all frames were reconstructed and match them to the us frame, assuming "frames" attribute is provided.
+                """
 
-            elif self.metadata["hdf5_tags"][0] == "reconstructions":
-                # for reconstructions, use middle frame
-                if "frame" in oa_attr:
-                    # legacy, frame was not list yet
-                    selected_frame = int(oa_attr["frame"])
-                    oa_img = np.array(oa_data[self.frame_id, :, :, 0, :])
-                    us_img = np.array(us_data[selected_frame, :1, :, 0, :])
-                elif "frames" in oa_attr:
-                    raise NotImplementedError(
-                        "Frame selection for reconstructions with multiple frames not implemented yet."
+                if isinstance(frame, (int, np.integer)):
+                    # handle native ints and numpy integer types
+                    return int(frame), int(frame)
+                elif isinstance(frame, str):
+                    frame_id_us = (
+                        avail_frames_us.index(frame)
+                        if frame in avail_frames_us
+                        else None
                     )
+                    frame_id_oa = (
+                        avail_frames_oa.index(frame)
+                        if frame in avail_frames_oa
+                        else None
+                    )
+
+                    if frame_id_us is None or frame_id_oa is None:
+                        raise ValueError(
+                            f"Frame name '{frame}' not found in available frames for subject {self.subject_id}. OA frames: {avail_frames_oa}, US frames: {avail_frames_us}."
+                        )
+
+                    # if frame_id_oa != frame_id_us:
+                    #     logging.info(
+                    #         f"Frame ID for OA ({frame_id_oa}) and US ({frame_id_us}) do not match for subject {self.subject_id}"
+                    #     )
+
+                    return frame_id_us, frame_id_oa
                 else:
-                    # use middle frame
-                    selected_frame = us_data.shape[0] // 2
-                    oa_img = np.array(oa_data[selected_frame, :, :, 0, :])
-                    us_img = np.array(us_data[selected_frame, :1, :, 0, :])
+                    raise ValueError(f"frame must be int or str. Got {frame!r}")
 
-                # oa_img = np.array(
-                #     oa_data[0, :, :, 0, :]
-                # )  # todo remove and uncomment next
+            def _resolve_target_channels(target_channels, avail_channels, default_len):
+                # helper to get channel indices
+                if target_channels is not None:
+                    if all(isinstance(ch, (int, np.integer)) for ch in target_channels):
+                        target_channel_ids = target_channels
+                        target_channel_names = [
+                            avail_channels[i] for i in target_channel_ids
+                        ]
+                    elif all(isinstance(ch, str) for ch in target_channels):
+                        ids = [
+                            avail_channels.index(ch) if ch in avail_channels else None
+                            for ch in target_channels
+                        ]
+                        if None in ids:
+                            raise ValueError(
+                                f"Some channel names were not found in available channels for subject {self.subject_id}. Available channels: {avail_channels}, target channels: {target_channels}."
+                            )
+                        target_channel_ids = ids
+                        target_channel_names = target_channels
+                    else:
+                        raise ValueError(
+                            f"target_channels must be a list of either all ints or all strs. Got {target_channels}"
+                        )
+                else:
+                    channel_ids = list(range(default_len))
+                    target_channel_ids = channel_ids
+                    target_channel_names = avail_channels
 
-            return oa_img, us_img
+                return list(target_channel_ids), list(target_channel_names)
+
+            # load the available frames and channels from the hdf5 attributes.
+            # this should be provided in the hdf5 datasets for the raw data under frames and channel_names attributes,
+            # however we also want to be able to handle legacy datasets where this was not provided
+            # so if these attributes dont exist, they will be loaded from the metadata
+            avail_frames_us = list(
+                us_attr["frames"]
+                if "frames" in us_attr
+                else self.src_metadata["avail_frames_us"]
+            )
+            avail_frames_oa = list(
+                oa_attr["frames"]
+                if "frames" in oa_attr
+                else self.src_metadata["avail_frames_oa"]
+            )
+            avail_channels_us = list(
+                us_attr["channel_names"]
+                if "channel_names" in us_attr
+                else self.src_metadata["avail_channels_us"]
+            )
+            avail_channels_oa = list(
+                oa_attr["channel_names"]
+                if "channel_names" in oa_attr
+                else self.src_metadata["avail_channels_oa"]
+            )
+
+            assert (
+                len(avail_frames_us) == us_data.shape[0]
+            ), f"Number of available US frames does not match number of frames in US data for subject {self.subject_id}"
+            assert (
+                len(avail_frames_oa) == oa_data.shape[0]
+            ), f"Number of available OA frames does not match number of frames in OA data for subject {self.subject_id}"
+            assert (
+                len(avail_channels_us) == us_data.shape[1]
+            ), f"Number of available US channels does not match number of channels in US data for subject {self.subject_id}"
+            assert (
+                len(avail_channels_oa) == oa_data.shape[1]
+            ), f"Number of available OA channels does not match number of channels in OA data for subject {self.subject_id}"
+
+            # infer frame ids
+            frame_id_us, frame_id_oa = _resolve_frame_ids(
+                self.frame, avail_frames_us, avail_frames_oa
+            )
+
+            # infer channel ids based on config and hdf5 attributes, default to all channels if not specified in config
+            channel_ids_us, channel_names_us = _resolve_target_channels(
+                self.data_config.target_channels_us,
+                avail_channels_us,
+                us_data.shape[1],
+            )
+
+            channel_ids_oa, channel_names_oa = _resolve_target_channels(
+                self.data_config.target_channels_oa,
+                avail_channels_oa,
+                oa_data.shape[1],
+            )
+
+            assert len(channel_ids_us) == len(
+                channel_names_us
+            ), f"Number of target US channel ids does not match number of target US channel names for subject {self.subject_id}"
+            assert len(channel_ids_oa) == len(
+                channel_names_oa
+            ), f"Number of target OA channel ids does not match number of target OA channel names for subject {self.subject_id}"
+
+            # load the data into shape [channels, width_x, depth_z]
+            us_img = us_data[frame_id_us, channel_ids_us, :, 0, :]
+            oa_img = oa_data[frame_id_oa, channel_ids_oa, :, 0, :]
+
+            us_meta = {
+                "channel_names": channel_names_us,
+                "channel_ids": channel_ids_us,
+                "frame_id": frame_id_us,
+                "frame_name": avail_frames_us[frame_id_us],
+            }
+
+            oa_meta = {
+                "channel_names": channel_names_oa,
+                "channel_ids": channel_ids_oa,
+                "frame_id": frame_id_oa,
+                "frame_name": avail_frames_oa[frame_id_oa],
+            }
+
+            # add global_attr to us_attr and oa_attr
+            us_attr["global"] = global_attr
+            oa_attr["global"] = global_attr
+
+            return us_img, us_attr, us_meta, oa_img, oa_attr, oa_meta
 
     def extraction_results(
         self, src_group: str = HDF5Tags.EXTRACTED, src_dataset: str = HDF5Tags.TABULAR

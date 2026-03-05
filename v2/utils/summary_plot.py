@@ -28,9 +28,7 @@ class SummaryPlot(PipelineComponent):
         pbar = tqdm(total=len(self.subjects), desc="Plotting Summary")
 
         for subject in self.subjects:
-            pbar.set_description(
-                f"Plotting summary for Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
-            )
+            pbar.set_description(f"Plotting summary for subject: {subject.subject_id}")
 
             data = {}
 
@@ -74,12 +72,6 @@ class SummaryPlot(PipelineComponent):
                     max_datasets = max(max_datasets, len(data[group]))
             max_groups = max(max_groups, len(data))
 
-            # get the channel index for the OA plot
-            # channel_id = subject.metadata["oa_channel_names"].index(
-            #     self.config.channel_name
-            # )
-            # channel_id = metadata["channel_names"].index(self.config.channel_name)
-
             # Create figure with subplots
             fig, axes = plt.subplots(
                 max_datasets,
@@ -120,7 +112,7 @@ class SummaryPlot(PipelineComponent):
                     ax.axis("off")
 
             fig.suptitle(
-                f"Group: {subject.group_id} | Study: {subject.study_id} | Scan: {subject.scan_id} | Frame: {subject.frame_id} | OA Channel: {self.config.oa_channel_name}",
+                f"Group: {subject.group_id} | Study: {subject.study_id} | Scan: {subject.scan_id} | Frame: {subject.frame} | OA Channel: {self.config.oa_channel_name}",
                 fontsize=16,
                 y=1.02,
             )

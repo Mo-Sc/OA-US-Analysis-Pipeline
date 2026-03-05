@@ -19,12 +19,15 @@ class HDF5Tags:
     IANNOTATION = "IANNOTATION"
     TABULAR = "ROI_FEATURES"
 
-    # attrbiutes
+
+class AttributeTags:
     INPUT_FILE = "input_file"
+    HDF5_PATH = "hdf5_path"
     STUDY_ID = "study_id"
     SCAN_ID = "scan_id"
-    FRAME_ID = "frame_id"
+    FRAME = "frame"
     GROUP_ID = "group_id"
-    METADATA = "metadata"
+    SUBJECT_ID = "subject_id"
+    METADATA = "source_metadata"
     DATA_CONFIG = "data_config"
     GLOBAL_CONFIG = "global_config"

@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from typing import List, Optional, Tuple
+from typing import List, Optional, Tuple, Union
 from pathlib import Path
 from abc import ABC
 import numpy as np
@@ -53,15 +53,24 @@ class DataConfig(Config):
     """
     Configuration for data loading
     Required parameters depend on the dataset
+    target_frames, target_channels_us, and target_channels_oa can be list of ints or strs:
+    ints refer to the index of the img in the dataset, while strs refer to the img names, which will be searched in the metadatas frames / channels attribute.
+    None means all frames or channels will be loaded.
+    target_frames can also be set to a string like "annotated". This way a load_subject function can interpret this as loading only the annotated frame.
     """
 
     input_dir: Path = Path("data/input")
     metadata_file: Path = Path("data/metadata.csv")
-    hdf5_tags: Optional[List[str]] = field(default_factory=list)
-    target_scans: Optional[List[int]] = None  # None means all scans
-    target_frames: Optional[List[int]] = None  # None means all frames
-    us_channel_names: List[str] = field(default_factory=list)
-    oa_channel_names: List[str] = field(default_factory=list)
+    target_scans: Optional[List[int]] = None
+    target_frames: Union[List[Union[int, str]], str] = None
+    hdf5_tags_us: Optional[List[str]] = field(
+        default_factory=lambda: ["ultrasounds", "ultrasound", "0"]
+    )
+    target_channels_us: Optional[List[Union[int, str]]] = field(
+        default_factory=lambda: [12]
+    )
+    hdf5_tags_oa: Optional[List[str]] = field(default_factory=list)
+    target_channels_oa: Optional[List[Union[int, str]]] = None
     px_size: float = 0.0001  # pixel size in m, image is 4cm x 4cm
 
 
@@ -180,6 +189,7 @@ class ExtractionConfig(Config):
     target_class_id: int = 2  # default target class id from roi_placement component
     feature_classes: List[str] = field(default_factory=lambda: ["firstorder"])
     derived_channels: Optional[List[str]] = field(default_factory=list)
+    positive_only: bool = False  # exclude zero or negative values
     xlsx_export: bool = True
 
 

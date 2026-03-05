@@ -33,9 +33,7 @@ class ROIPlacementComponent(PipelineComponent):
         pbar = tqdm(total=len(self.subjects), desc="ROI Placement")
 
         for subject in self.subjects:
-            pbar.set_description(
-                f"ROI Placement Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
-            )
+            pbar.set_description(f"ROI Placement subject: {subject.subject_id}")
 
             mask, mask_meta = subject.load_dataset(src_group, src_dataset)
 
@@ -50,9 +48,6 @@ class ROIPlacementComponent(PipelineComponent):
 
             # binarize mask to desired class
             mask_2d = (mask_2d == self.config.target_class_id).astype(np.uint8)
-
-            # # overwrite global px_size by subject metadata
-            # self.config.px_size = subject.metadata["px_size"]
 
             # Create ROI shape
             roi_shape = ShapeFactory.create_shape(self.config)

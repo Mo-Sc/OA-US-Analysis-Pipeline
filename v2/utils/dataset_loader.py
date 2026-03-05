@@ -34,14 +34,14 @@ class DatasetLoader(PipelineComponent):
 
         for subject in self.subjects:
             pbar.set_description(
-                f"Loading dataset file for Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
+                f"Loading dataset file for subject: {subject.subject_id}"
             )
 
             filename = self.config.naming_scheme.format(
                 group_id=subject.group_id,
                 study_id=subject.study_id,
                 scan_id=subject.scan_id,
-                frame_id=subject.frame_id,
+                frame_id=subject.frame,
             )
 
             dataset_path = os.path.join(self.config.base_path, filename)
@@ -70,7 +70,7 @@ class DatasetLoader(PipelineComponent):
                 import h5py
 
                 with h5py.File(dataset_path, "r") as f:
-                    data = f["data"][()]
+                    data = f["data"][()]  # TODO: provide dataset name in config
                     data = data.squeeze()
                     # flip upside down to match hdf5 orientation
                     data = np.flip(data, axis=1)

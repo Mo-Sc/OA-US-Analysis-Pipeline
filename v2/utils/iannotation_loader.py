@@ -32,7 +32,7 @@ class IAnnotationLoader(PipelineComponent):
 
         for subject in self.subjects:
             pbar.set_description(
-                f"Loading iannotation file for Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
+                f"Loading iannotation file for subject: {subject.subject_id}"
             )
 
             # Load mask from ithera iannotation (stored in hdf5)
@@ -41,14 +41,20 @@ class IAnnotationLoader(PipelineComponent):
                 f"Study_{subject.study_id}/Scan_{subject.scan_id}.hdf5",
                 # f"Study_{subject.study_id}/Scan_{subject.scan_id}.iannotation",
             )
-            mask_2d = self._load_iannotation(iannotation_path)
 
-            subject.add_dataset(
-                target_group,
-                target_dataset,
-                mask_2d[np.newaxis, ...],
-                attributes=hdf5_attributes,
-            )
+            try:
+                mask_2d = self._load_iannotation(iannotation_path)
+
+                subject.add_dataset(
+                    target_group,
+                    target_dataset,
+                    mask_2d[np.newaxis, ...],
+                    attributes=hdf5_attributes,
+                )
+            except Exception as e:
+                print(
+                    f"Failed to load iannotation for Study {subject.study_id} Scan {subject.scan_id}: {e}"
+                )
 
             pbar.update(1)
 

@@ -37,7 +37,7 @@ class ImageQualityMetricsStrategy(BaseStrategy):
 
         for subject in self.subjects:
             pbar.set_description(
-                f"Calculating Image Metrics, Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
+                f"Calculating Image Metrics, subject: {subject.subject_id}"
             )
 
             recon_data, recon_meta = subject.load_dataset(
@@ -59,23 +59,8 @@ class ImageQualityMetricsStrategy(BaseStrategy):
             else:
                 roi_img = None
 
-            try:
-                recon_channel_names = attr_to_list(recon_meta["channel_names"])
-                gt_channel_names = attr_to_list(gt_meta["channel_names"])
-            except KeyError:
-                # this uses hardcoded fallback for known channel configs
-                # necessary for old datasets without channel names in metadata
-                # TODO: remove this fallback in future versions
-                logging.warning(
-                    f"Channel names not found in metadata for {subject.subject_id}. Falling back to hardcoded channel names."
-                )
-                from v2.utils.channels import infer_channel_names_from_shape
-
-                gt_channel_names = infer_channel_names_from_shape(gt_data.shape)
-                recon_channel_names = infer_channel_names_from_shape(recon_data.shape)
-
-                logging.warning(f"Inferred GT channels: {gt_channel_names}")
-                logging.warning(f"Inferred Recon channels: {recon_channel_names}")
+            recon_channel_names = attr_to_list(recon_meta["channel_names"])
+            gt_channel_names = attr_to_list(gt_meta["channel_names"])
 
             # TODO: remove this check, but for now keep it for debugging
             assert (
@@ -136,17 +121,6 @@ class ImageQualityMetricsStrategy(BaseStrategy):
                         gt_full_norm, recon_full_norm, mask, data_range=1.0
                     )
 
-                    # OPTIONAL: SSIM with different window sizes for parameter tuning
-                    # channel_metrics["SSIM_11"] = masked_ssim(
-                    #     gt_full_norm, recon_full_norm, mask, data_range=1.0, win_size=11
-                    # )
-                    # channel_metrics["SSIM_21"] = masked_ssim(
-                    #     gt_full_norm, recon_full_norm, mask, data_range=1.0, win_size=21
-                    # )
-                    # channel_metrics["SSIM_51"] = masked_ssim(
-                    #     gt_full_norm, recon_full_norm, mask, data_range=1.0, win_size=51
-                    # )
-
                 if "DIFF" in self.config.metrics:
                     self._save_diff_image(
                         gt_full_norm,
@@ -174,17 +148,8 @@ class ImageQualityMetricsStrategy(BaseStrategy):
                     "MSE",
                     "PSNR",
                     "SSIM",
-                    # "SSIM_11",
-                    # "SSIM_21",
-                    # "SSIM_51",
                 ]
                 if metric in self.config.metrics
-                # or metric
-                # in [
-                #     "SSIM_11",
-                #     "SSIM_21",
-                #     "SSIM_51",
-                # ]
             }
 
         logging.info(f"Mean Metrics per channel: {json.dumps(mean_metrics, indent=2)}")

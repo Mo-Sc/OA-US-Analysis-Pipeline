@@ -32,9 +32,7 @@ class PostprocessingComponent(PipelineComponent):
         pbar = tqdm(total=len(self.subjects), desc="Postprocessing")
 
         for subject in self.subjects:
-            pbar.set_description(
-                f"Postprocessing Study {subject.study_id} Scan {subject.scan_id} Frame {subject.frame_id}"
-            )
+            pbar.set_description(f"Postprocessing subject: {subject.subject_id}")
 
             mask, mask_meta = subject.load_dataset(src_group, src_dataset)
 
